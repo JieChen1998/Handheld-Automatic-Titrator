@@ -1,0 +1,411 @@
+#include <ESP8266WiFi.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <SoftwareSerial.h>
+#include <EEPROM.h>
+#include <DNSServer.h>
+// Replace with your network credentials 輸入WIFI的SSID和密碼
+const char* ssidAP = "ESP_WiFi";
+const char* passwordAP = "12345678";
+
+const char* ssid = "SOC_6505";
+const char* password = "33733373";
+
+const char* PARAM_INPUT_1 = "state";
+
+const int output = 12;
+const int buttonPin = 4;
+
+int ledState = LOW;          // the current state of the output pin
+
+int buttonState;             // the current reading from the input pin
+int lastButtonState = LOW;   // the previous reading from the input pin
+
+unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
+unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
+AsyncWebServer server(80);
+
+SoftwareSerial uart2(13, 15); //RX=d7,TX=d8
+
+String UART_String = "";
+char x[50];
+int i = 0, divalue = 0, test = 0, set_didin_value = 0;
+long now = 0;
+bool wifi_test = false;
+long lastMsg1 = 0, lastMsg2 = 0, lastvalue=0;
+int value1 = 0, value2 = 0,value3=0;
+int val = 70;
+
+const byte DNS_PORT = 53;//DNS埠號
+IPAddress apIP(192, 168, 4, 1);//esp8266-AP-IP地址
+DNSServer dnsServer;//建立dnsServer例項
+
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html>
+<head>
+  <title>Titration control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href='https://unpkg.com/boxicons@2.1.1/css/boxicons.min.css' rel='stylesheet'>
+  <style>
+    html {font-family: Arial; display: inline-block; text-align: center;}
+    h2 {font-size: 3.0rem;}
+    p {font-size: 3.0rem;}
+    body {max-width: 600px; margin:0px auto; padding-bottom: 25px;}
+    .switch {position: relative; display: inline-block; width: 120px; height: 68px} 
+    .switch input {display: none}
+    .slider {position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; border-radius: 34px}
+    .slider:before {position: absolute; content: ""; height: 52px; width: 52px; left: 8px; bottom: 8px; background-color: #fff; -webkit-transition: .4s; transition: .4s; border-radius: 68px}
+    #sitebody{width:750px;margin:0 auto;font-size:13px;}
+    #header{background-color:#FFD4D4;height:80px;text-align:center;line-height:80px;font-size: 40px;}
+    #sidebar_left{background-color:#FFECC9;width:250px;height:100px;text-align:center;line-height:100px;float:left;font-size: 25px;}
+    #sidebar_center{background-color:#FFECC9;width:250px;height:100px;text-align:center;line-height:100px;float:left;font-size: 25px;}
+    #sidebar_right{background-color:#FFECC9;width:250px;height:100px;text-align:center;line-height:100px;float:right;font-size: 25px;}
+    
+    #setting_didin_value{background-color:#90ee90;width:375px;height:100px;text-align:center;line-height:100px;float:left;font-size: 25px;}
+    #setting_tit_value{background-color:#90ee90;width:375px;height:100px;text-align:center;line-height:100px;float:right;font-size: 25px;}
+   
+    .button1 { background-color: #195B6A;border: none;color: white;border-radius: 5px;cursor: pointer;text-align: center;width: 250px;height: 50px;margin: 10px 61px;font-size: 20px;}
+    .input1 { background-color: #F3FFF3;border-radius: 5px;cursor: pointer;text-align: center;width: 200px;height: 60px;margin: 10px 82px;font-size: 20px;} 
+    #show_didin_value{background-color:#FFECC9;width:250px;height:100px;text-align:center;line-height:100px;float:left;font-size: 25px;}
+    #show_tit_value{background-color:#FFECC9;width:250px;height:100px;text-align:center;line-height:100px;float:left;font-size: 25px;}
+    #lastValue{background-color:#FFECC9;width:250px;height:100px;text-align:center;line-height:100px;float:right;font-size: 25px;}                       
+    input:checked+.slider {background-color: #2196F3}
+    input:checked+.slider:before {-webkit-transform: translateX(52px); -ms-transform: translateX(52px); transform: translateX(52px)}
+  </style>
+</head>
+<body>
+  <div id=sitebody><div id=header>Titrator Web Server</div><div id=sidebar_left>Absorption Value</div><div id=sidebar_center>Titration Value</div><div id=sidebar_right>Remain Value</div>      
+  %BUTTONPLACEHOLDER%  
+  
+<script>
+function Didin_value_fun(element)            //////DidinValue
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/Didin?state="+String(document.getElementById("Set_didin_value").value), true); 
+    xhr.send();
+    //document.getElementById("show_didin_value").innerHTML = this.responseText;
+}
+setInterval(function ( ) {
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      document.getElementById("show_didin_value").innerHTML = this.responseText;
+    }
+  };
+  xhttp.open("GET", "/DidinTest", true);
+  xhttp.send();
+}, 1000 ) ;
+
+</script>
+<script>
+function Tit_value_fun(element)                //////NowStateValue
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/NowState?state="+String(document.getElementById("Set_tit_value").value), true);
+    xhr.send();
+    //document.getElementById("show_tit_value").value = document.getElementById("Set_tit_value").value;
+}
+setInterval(function ( ) {
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+       document.getElementById("show_tit_value").innerHTML = this.responseText;
+    }
+  };
+  xhttp.open("GET", "/NowStateTest", true);
+  xhttp.send();
+}, 300 ) ;
+</script>
+
+<script>
+
+setInterval(function ( ) {                           //////lastValue
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+       document.getElementById("lastValue").innerHTML = this.responseText;
+    }
+  };
+  xhttp.open("GET", "/lastValueTest", true);
+  xhttp.send();
+}, 300 ) ;
+</script>
+
+<script>
+function Stop_fun(element)
+{
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/Stop?state=", true);
+    xhr.send();
+}
+</script>
+<script>function toggleCheckbox(element) {
+  var xhr = new XMLHttpRequest();
+  if(element.checked){ xhr.open("GET", "/update?state=1", true); }
+  else { xhr.open("GET", "/update?state=0", true); }
+  xhr.send();
+}
+
+setInterval(function ( ) {
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      var inputChecked;
+      var outputStateM;
+      if( this.responseText == 1){ 
+        inputChecked = true;
+        outputStateM = "On";
+      }
+      else if(this.responseText == 0){ 
+        inputChecked = false;
+        outputStateM = "Off";
+      }
+      document.getElementById("output").checked = inputChecked;
+      document.getElementById("outputState").innerHTML = outputStateM;
+    }
+  };
+  xhttp.open("GET", "/state", true);
+  xhttp.send();
+}, 300 ) ;
+  
+</script>
+</body>
+</html>
+)rawliteral";
+
+// Replaces placeholder with button section in your web page
+String processor(const String& var){
+  //Serial.println(var);
+  if(var == "BUTTONPLACEHOLDER"){
+    String buttons ="";
+    String outputStateValue = outputState();
+    buttons+="<div id=\"show_didin_value\">0</div><div id=\"show_tit_value\">0</div><div id=\"lastValue\">0</div>";
+    buttons+="<div id=\"setting_didin_value\">Setting Absorption Value</div><div id=\"setting_tit_value\">Setting Titration Value</div>";
+    buttons+="<input id=\"Set_didin_value\" class =input1 value=0></input><input id=\"Set_tit_value\" class =input1 value=0></input><button onclick=\"Didin_value_fun(this)\" class=button1>Send_abs_value</button><button onclick=\"Tit_value_fun(this)\" class=button1>Send_tit_value</button>";
+    buttons+="<button onclick=\"Stop_fun(this)\" class=button1>Stop</button>";
+    buttons+= "<h4>Output - LED - State <span id=\"outputState\"><span></h4><label class=\"switch\"><input type=\"checkbox\" onchange=\"toggleCheckbox(this)\" id=\"output\" " + outputStateValue + "><span class=\"slider\"></span></label></div>";
+    //buttons+="<i class='bx bx-baguette bx-tada' ></i>";
+    return buttons;
+  }
+  return String();
+}
+String outputState(){
+  if(digitalRead(output)){
+    return "checked";
+  }
+  else {
+    return "";
+  }
+  return "";
+}
+
+void setup(){
+  // Serial port for debugging purposes
+  Serial.begin(9600);
+  uart2.begin(9600);
+  EEPROM.begin(240);
+  pinMode(output, OUTPUT);
+  digitalWrite(output, LOW);
+  pinMode(buttonPin, INPUT);
+  wifi_setup();
+  // Connect to Wi-Fi
+  server_open();
+}
+  
+void loop() {
+  now = millis();
+  if (now - lastMsg1 > 300 && test>=1) {
+    lastMsg1 = now;
+    SendData();
+  }
+  if (now - lastMsg2 > 100) {
+    lastMsg2 = now;
+    SendData2();
+  }
+  didin_value();
+}
+
+void SendData()
+{
+  if ( test == 1) {
+    value1 = divalue;
+    Serial.print("sendNowStateData=");
+    Serial.println(value1);
+    if(value1<=0){
+      test=0;
+    }
+  }
+  if ( test == 2) {
+    value2 = set_didin_value;
+    Serial.print("sendDidinData=");
+    Serial.println(value2);
+    if(value2<=0){
+      test=0;
+    }
+  }
+}
+
+void SendData2()
+{
+   value3 = lastvalue;
+}
+
+void didin_value() {
+  String s = "";
+  i = 0;
+  int eee;
+  while (uart2.available()) {
+    char c = uart2.read();
+    if (c != '\xff') {
+      s += c;
+      x[i] = c;
+      i++;
+    }
+    delay(5);
+  }
+  if (s != "") {
+    if (x[0] == 'n' && x[1] == '=')
+    {
+      test = 1;
+      divalue = x[2];
+    }
+    else if (x[0] == 'd' && x[1] == '=')
+    {
+      test = 2;
+      set_didin_value = x[2];
+    }
+    else if(x[0] == 'l' && x[1] == 'a' && x[2] == 's' && x[3] == 't' && x[4] == '=')
+    {
+       lastvalue = x[5];
+       //Serial.print(lastvalue);
+    }
+    else
+    {
+      test = 0;
+    }
+  }
+  
+  
+}
+
+void server_open(){
+  // Route for root / web page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", index_html, processor);
+  });
+
+  // Send a GET request to <ESP_IP>/update?state=<inputMessage>
+  server.on("/update", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String inputMessage;
+    String inputParam;
+    // GET input1 value on <ESP_IP>/update?state=<inputMessage>
+    if (request->hasParam(PARAM_INPUT_1)) {
+      inputMessage = request->getParam(PARAM_INPUT_1)->value();
+      inputParam = PARAM_INPUT_1;
+      digitalWrite(output, inputMessage.toInt());
+      ledState = !ledState;
+    }
+    else {
+      inputMessage = "No message sent";
+      inputParam = "none";
+    }
+    Serial.print("LED=");
+    Serial.println(inputMessage);
+    request->send(200, "text/plain", "OK");
+  });
+
+  server.on("/Didin", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String inputMessage;
+    String inputParam;
+    // GET input1 value on <ESP_IP>/update?state=<inputMessage>
+    if (request->hasParam(PARAM_INPUT_1)) {
+      inputMessage = request->getParam(PARAM_INPUT_1)->value();
+      inputParam = PARAM_INPUT_1;
+    }
+    else {
+      inputMessage = "No message sent";
+      inputParam = "none";
+    }
+    Serial.print("Didin=");
+    if(inputMessage.toInt()>=70)
+    {
+       inputMessage="70";
+    }
+    Serial.println(inputMessage);
+    uart2.write("d2=");
+    uart2.print(inputMessage);
+    uart2.write("\xff\xff\xff");
+    request->send(200, "text/plain", "OK");
+  });
+  server.on("/NowState", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    String inputMessage;
+    String inputParam;
+    // GET input1 value on <ESP_IP>/update?state=<inputMessage>
+    if (request->hasParam(PARAM_INPUT_1)) {
+      inputMessage = request->getParam(PARAM_INPUT_1)->value();
+      inputParam = PARAM_INPUT_1;
+    }
+    else {
+      inputMessage = "No message sent";
+      inputParam = "none";
+    }
+    Serial.print("NowState=");
+    if(inputMessage.toInt()>=70)
+    {
+       inputMessage="70";
+    }
+    Serial.println(inputMessage);
+    uart2.write("n2=");
+    uart2.print(inputMessage);
+    uart2.write("\xff\xff\xff");
+    request->send(200, "text/plain", "OK");
+  });
+  server.on("/Stop", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    Serial.println("Stop");
+    test=0;
+    uart2.write("stop");
+    uart2.write("\xff\xff\xff");
+    request->send(200, "text/plain", "OK");
+  });
+  
+  server.on("/DidinTest", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", String(value2).c_str());
+  });
+
+  server.on("/NowStateTest", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", String(value1).c_str());
+  });
+
+  server.on("/lastValueTest", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", String(value3).c_str());
+  });
+  // Send a GET request to <ESP_IP>/state
+  server.on("/state", HTTP_GET, [] (AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", String(digitalRead(output)).c_str());
+  });
+  // Start server
+
+  server.onNotFound([](AsyncWebServerRequest *request){
+    request->send(404, "text/plain", "The content you are looking for was not found.");
+  });
+  
+  server.begin();
+  }
+
+void wifi_setup()
+{
+  WiFi.disconnect();
+  //WiFi.mode(WIFI_AP); // 切換WiFi到AP mode
+  //WiFi.softAP(ssidAP, passwordAP); // 打開ESP WiFi熱點
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi..");
+  }
+  // Print ESP Local IP Address
+  Serial.println(WiFi.localIP());
+  // Print ESP Local IP Address
+  //Serial.println(WiFi.softAPIP());
+  
+  wifi_test = true;
+}
